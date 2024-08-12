@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/oscar/internal/testutil"
 	"rsc.io/ordered"
 )
 
@@ -28,6 +29,11 @@ func TestDB(t *testing.T, db DB) {
 		t.Fatalf("Get(missing) = %v, %v, want nil, false", val, ok)
 	}
 
+	testutil.StopPanic(func() {
+		db.Set(nil, []byte{0})
+		t.Fatal("Set with nil key does not panic but should")
+	})
+
 	db.Delete([]byte("key"))
 	if val, ok := db.Get([]byte("key")); val != nil || ok != false {
 		// unreachable except for bad db
@@ -40,6 +46,11 @@ func TestDB(t *testing.T, db DB) {
 		b.MaybeApply()
 	}
 	b.Apply()
+
+	testutil.StopPanic(func() {
+		b.Set(nil, []byte{0})
+		t.Fatal("Set with nil key does not panic but should")
+	})
 
 	collect := func(min, max, stop int) []int {
 		t.Helper()
@@ -70,6 +81,16 @@ func TestDB(t *testing.T, db DB) {
 	if scan, want := collect(3, 6, 5), []int{3, 4, 5}; !slices.Equal(scan, want) {
 		// unreachable except for bad db
 		t.Fatalf("Scan(3, 6) with break at 5 = %v, want %v", scan, want)
+	}
+
+	// Passing a zero-length value for end to Scan will return an empty sequence.
+	something := false
+	for range db.Scan(nil, nil) {
+		something = true
+		break
+	}
+	if something {
+		t.Fatal("Scan(nil, nil) returned a non-empty sequence, want an empty one")
 	}
 
 	db.DeleteRange(ordered.Encode(4), ordered.Encode(7))
@@ -139,12 +160,8 @@ func TestDBLock(t *testing.T, db locker) {
 	<-c
 	wg.Wait()
 
-	func() {
-		defer func() {
-			recover()
-		}()
+	testutil.StopPanic(func() {
 		db.Unlock("def")
 		t.Errorf("Unlock never-locked key did not panic")
-	}()
-
+	})
 }

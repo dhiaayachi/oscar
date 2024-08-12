@@ -16,6 +16,7 @@ import (
 // corresponding to documents.
 type VectorDB interface {
 	// Set sets the vector associated with the given document ID to vec.
+	// The id argument must not be empty.
 	Set(id string, vec llm.Vector)
 
 	// Delete deletes any vector associated with document ID key.
@@ -36,6 +37,7 @@ type VectorDB interface {
 	//		fmt.Printf("%q: %q\n", key, vec)
 	//	}
 	//
+	// The pairs are ordered in lexicographic order of IDs.
 	// In iterations that only need the keys or only need the vectors for a subset of keys,
 	// some VectorDB implementations may avoid work when the value function is not called.
 	All() iter.Seq2[string, func() llm.Vector]

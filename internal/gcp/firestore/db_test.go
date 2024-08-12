@@ -6,29 +6,22 @@ package firestore
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"math/rand/v2"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
+	"golang.org/x/oscar/internal/gcp/gcpconfig"
 	"golang.org/x/oscar/internal/grpcrr"
 	"golang.org/x/oscar/internal/storage"
 	"golang.org/x/oscar/internal/testutil"
 )
 
-var (
-	project  = flag.String("project", "", "project ID for testing")
-	database = flag.String("database", "", "Firestore database for testing")
-)
+const firestoreTestDatabase = "test"
 
-// To record this test:
-//
-//	go test -v -run 'TestDB$' -grpcrecord db -project $OSCAR_PROJECT -database test
 func TestDB(t *testing.T) {
-	rr, fsProject, fsDatabase := openRR(t, "testdata/db.grpcrr")
+	rr, project := openRR(t, "testdata/db.grpcrr")
 	defer func() {
 		if err := rr.Close(); err != nil {
 			t.Fatal(err)
@@ -36,7 +29,7 @@ func TestDB(t *testing.T) {
 	}()
 	ctx := context.Background()
 
-	db, err := NewDB(ctx, testutil.Slogger(t), fsProject, fsDatabase, rr.ClientOptions()...)
+	db, err := NewDB(ctx, testutil.Slogger(t), project, firestoreTestDatabase, rr.ClientOptions()...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,11 +56,16 @@ func TestDB(t *testing.T) {
 
 func TestLock(t *testing.T) {
 	// The lock tests cannot be run with record/replay because they depend too much on time and state.
-	if *project == "" {
-		t.Skip("missing -project")
+	// They are also slow, so skip them in short mode.
+	if testing.Short() {
+		t.Skip("skipping in short mode")
+	}
+	projectID, err := gcpconfig.Project()
+	if err != nil {
+		t.Skipf("skipping: %v", err)
 	}
 	ctx := context.Background()
-	db, err := NewDB(ctx, testutil.Slogger(t), *project, *database, nil)
+	db, err := NewDB(ctx, testutil.Slogger(t), projectID, firestoreTestDatabase)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,50 +103,39 @@ func TestLock(t *testing.T) {
 		// So pick a random name.
 		name := fmt.Sprintf("M%d", rand.IntN(10))
 		db.deleteLock(nil, name) // Ensure the lock is not present.
-		db2, err := NewDB(ctx, testutil.Slogger(t), *project, *database, nil)
+		db2, err := NewDB(ctx, testutil.Slogger(t), projectID, firestoreTestDatabase)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer db2.Close()
 
-		func() {
-			defer func() { recover() }()
+		testutil.StopPanic(func() {
 			db.Lock(name)
 			db2.Unlock(name)
 			t.Error("unlock wrong owner did not panic")
-		}()
+		})
 	})
 }
 
 func TestErrors(t *testing.T) {
-	if !panics(func() {
+	testutil.StopPanic(func() {
 		var b batch
 		b.set("x", nil, 1)
-	}) {
 		t.Error("batch.set does not panic on nil value")
-	}
+	})
 }
 
-func openRR(t *testing.T, file string) (_ *grpcrr.RecordReplay, fsProject, fsDatabase string) {
+func openRR(t *testing.T, file string) (_ *grpcrr.RecordReplay, projectID string) {
 	rr, err := grpcrr.Open(filepath.FromSlash(file))
 	if err != nil {
 		t.Fatalf("grpcrr.Open: %v", err)
 	}
 	if rr.Recording() {
-		if *project == "" {
-			t.Fatal("recording requires -project")
-		}
-		// The -database flag can be omitted. We'll use the default one.
-		rr.SetInitial([]byte(*project + "," + *database))
-		return rr, *project, *database
+		projectID = gcpconfig.MustProject(t)
+		rr.SetInitial([]byte(projectID))
+		return rr, projectID
 	}
-	// Allow -project and -database on replay because other tests might need them.
-	var found bool
-	fsProject, fsDatabase, found = strings.Cut(string(rr.Initial()), ",")
-	if !found {
-		t.Fatalf("%s: bad initial state", file)
-	}
-	return rr, fsProject, fsDatabase
+	return rr, string(rr.Initial())
 }
 
 func panics(f func()) (b bool) {

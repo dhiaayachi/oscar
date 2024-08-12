@@ -62,6 +62,9 @@ type vectorDoc struct {
 
 // Set implements [storage.VectorDB.Set].
 func (db *VectorDB) Set(id string, vec llm.Vector) {
+	if id == "" {
+		db.fs.Panic("firestore VectorDB Set: empty ID")
+	}
 	doc := vectorDoc{firestore.Vector32(vec)}
 	if _, err := db.docref(id).Set(context.TODO(), doc); err != nil {
 		db.fs.Panic("firestore VectorDB Set", "id", id, "err", err)
@@ -105,7 +108,7 @@ func (db *VectorDB) All() iter.Seq2[string, func() llm.Vector] {
 			id := db.decodeVectorID(ds.Ref.ID)
 			var doc vectorDoc
 			if err := ds.DataTo(&doc); err != nil {
-				db.fs.Panic("firestore VectorDB All", "ID", id, "err", err)
+				db.fs.Panic("firestore VectorDB All", "id", id, "err", err)
 			}
 			if !yield(id, func() llm.Vector { return llm.Vector(doc.Embedding) }) {
 				return
@@ -152,8 +155,9 @@ func (db *VectorDB) Flush() {
 	// Firestore operations do not require flushing.
 }
 
+// A vBatch is a [storage.VectorBatch] for a [VectorDB].
 type vBatch struct {
-	b *batch
+	b *batch // underlying DB operations
 }
 
 // Batch implements [storage.VectorDB.Batch].
@@ -167,9 +171,13 @@ const perFloatSize = 11
 
 // Set implements [storage.VectorBatch.Set].
 func (b *vBatch) Set(id string, vec llm.Vector) {
+	if id == "" {
+		b.b.f.Panic("firestore VectorDB Set: empty ID")
+	}
 	b.b.set(encodeVectorID(id), vectorDoc{firestore.Vector32(vec)}, len(vec)*perFloatSize)
 }
 
+// Delete implements [storage.VectorBatch.Delete].
 func (b *vBatch) Delete(id string) {
 	b.b.delete(encodeVectorID(id))
 }
